@@ -229,7 +229,38 @@ func NewClient(addrs []string, conf *Config) (Client, error) {
 
 	DebugLogger.Println("Successfully initialized new client")
 
+	globalClientsRegistry.Add(client)
+
 	return client, nil
+}
+
+func (client *client) resetMetadata() {
+	if client.Closed() {
+		return
+	}
+
+	client.lock.Lock()
+	defer client.lock.Unlock()
+
+	client.metadata = make(map[string]map[int32]*PartitionMetadata)
+	client.metadataTopics = make(map[string]none)
+}
+
+func (client *client) dumpDebugVars() []string {
+	if client.Closed() {
+		return nil
+	}
+
+	client.lock.RLock()
+	defer client.lock.RUnlock()
+
+	topics := make([]string, 0, len(client.metadataTopics))
+
+	for topic := range client.metadataTopics {
+		topics = append(topics, topic)
+	}
+
+	return topics
 }
 
 func (client *client) Config() *Config {
@@ -1112,6 +1143,11 @@ func (client *client) updateMetadata(data *MetadataResponse, allKnownMetaData bo
 		client.cachedPartitionsResults = make(map[string][maxPartitionIndex][]int32)
 	}
 	for _, topic := range data.Topics {
+		if FilterMetadataTopicsSwitch.Enabled() && !GlobalUsedTopicRegistry.Has(topic.Name) {
+			DebugLogger.Printf("sarama: skipping topic %s which does not exists in topic registry", topic.Name)
+			continue
+		}
+
 		// topics must be added firstly to `metadataTopics` to guarantee that all
 		// requested topics must be recorded to keep them trackable for periodically
 		// metadata refresh.

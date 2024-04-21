@@ -3,8 +3,10 @@ package sarama
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"sync"
 
+	"github.com/IBM/sarama/mickey/bytepool"
 	snappy "github.com/eapache/go-xerial-snappy"
 	"github.com/klauspost/compress/gzip"
 	"github.com/pierrec/lz4/v4"
@@ -18,19 +20,6 @@ var (
 	}
 
 	gzipReaderPool sync.Pool
-
-	bufferPool = sync.Pool{
-		New: func() interface{} {
-			return new(bytes.Buffer)
-		},
-	}
-
-	bytesPool = sync.Pool{
-		New: func() interface{} {
-			res := make([]byte, 0, 4096)
-			return &res
-		},
-	}
 )
 
 func decompress(cc CompressionCodec, data []byte) ([]byte, error) {
@@ -50,17 +39,13 @@ func decompress(cc CompressionCodec, data []byte) ([]byte, error) {
 			return nil, err
 		}
 
-		buffer := bufferPool.Get().(*bytes.Buffer)
-		_, err = buffer.ReadFrom(reader)
-		// copy the buffer to a new slice with the correct length
-		// reuse gzipReader and buffer
-		gzipReaderPool.Put(reader)
-		res := make([]byte, buffer.Len())
-		copy(res, buffer.Bytes())
-		buffer.Reset()
-		bufferPool.Put(buffer)
+		defer gzipReaderPool.Put(reader)
 
-		return res, err
+		if bytepool.UseDecompressBytePoolSwitch.Enabled() {
+			return bytepool.ReadAll(reader)
+		}
+
+		return io.ReadAll(reader)
 	case CompressionSnappy:
 		return snappy.Decode(data)
 	case CompressionLZ4:
@@ -70,28 +55,15 @@ func decompress(cc CompressionCodec, data []byte) ([]byte, error) {
 		} else {
 			reader.Reset(bytes.NewReader(data))
 		}
-		buffer := bufferPool.Get().(*bytes.Buffer)
-		_, err := buffer.ReadFrom(reader)
-		// copy the buffer to a new slice with the correct length
-		// reuse lz4Reader and buffer
-		lz4ReaderPool.Put(reader)
-		res := make([]byte, buffer.Len())
-		copy(res, buffer.Bytes())
-		buffer.Reset()
-		bufferPool.Put(buffer)
+		defer lz4ReaderPool.Put(reader)
 
-		return res, err
+		if bytepool.UseDecompressBytePoolSwitch.Enabled() {
+			return bytepool.ReadAll(reader)
+		}
+
+		return io.ReadAll(reader)
 	case CompressionZSTD:
-		buffer := *bytesPool.Get().(*[]byte)
-		var err error
-		buffer, err = zstdDecompress(ZstdDecoderParams{}, buffer, data)
-		// copy the buffer to a new slice with the correct length and reuse buffer
-		res := make([]byte, len(buffer))
-		copy(res, buffer)
-		buffer = buffer[:0]
-		bytesPool.Put(&buffer)
-
-		return res, err
+		return zstdDecompress(ZstdDecoderParams{}, nil, data)
 	default:
 		return nil, PacketDecodingError{fmt.Sprintf("invalid compression specified (%d)", cc)}
 	}

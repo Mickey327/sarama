@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	mickeybreaker "github.com/IBM/sarama/mickey/breaker"
 	"github.com/eapache/go-resiliency/breaker"
 	"github.com/eapache/queue"
 	"github.com/rcrowley/go-metrics"
@@ -477,7 +478,7 @@ type topicProducer struct {
 	topic  string
 	input  <-chan *ProducerMessage
 
-	breaker     *breaker.Breaker
+	breaker     mickeybreaker.Breaker
 	handlers    map[int32]chan<- *ProducerMessage
 	partitioner Partitioner
 }
@@ -488,7 +489,7 @@ func (p *asyncProducer) newTopicProducer(topic string) chan<- *ProducerMessage {
 		parent:      p,
 		topic:       topic,
 		input:       input,
-		breaker:     breaker.New(3, 1, 10*time.Second),
+		breaker:     mickeybreaker.NewDummy(),
 		handlers:    make(map[int32]chan<- *ProducerMessage),
 		partitioner: p.conf.Producer.Partitioner(topic),
 	}
